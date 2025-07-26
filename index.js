@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 
-const { MongoClient } = require('mongodb');
+const { MongoClient, ObjectId } = require('mongodb');
 const port = process.env.PORT || 5000;
 
 const app = express();
@@ -47,6 +47,46 @@ async function run() {
       } catch (error) {
         console.error('Error inserting class:', error);
         res.status(500).send({ error: 'Failed to insert class' });
+      }
+    });
+
+    // GET: Classes created by this teacher
+    app.get('/teacher/classes', async (req, res) => {
+      const email = req.query.email;
+      const result = await classesCollection
+        .find({ teacherEmail: email })
+        .toArray();
+      res.send(result);
+    });
+    // PATCH: Update a class by ID (teacher)
+    app.patch('/teacher/classes/:id', async (req, res) => {
+      try {
+        const classId = req.params.id;
+        const updatedData = req.body;
+
+        const result = await classesCollection.updateOne(
+          { _id: new ObjectId(classId) },
+          { $set: updatedData }
+        );
+
+        res.send(result);
+      } catch (error) {
+        console.error('Error updating class:', error);
+        res.status(500).send({ error: 'Failed to update class' });
+      }
+    });
+
+    // DELETE: Remove a class by ID (teacher)
+    app.delete('/teacher/classes/:id', async (req, res) => {
+      try {
+        const classId = req.params.id;
+        const result = await classesCollection.deleteOne({
+          _id: new ObjectId(classId),
+        });
+        res.send(result);
+      } catch (error) {
+        console.error('Error deleting class:', error);
+        res.status(500).send({ error: 'Failed to delete class' });
       }
     });
 
