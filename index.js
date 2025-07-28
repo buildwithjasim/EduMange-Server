@@ -82,6 +82,30 @@ async function run() {
     });
 
     // save and update userInfo in db
+    app.post('/user', async (req, res) => {
+      try {
+        const userData = req.body;
+
+        // Check if the user already exists (by email)
+        const existingUser = await usersCollection.findOne({
+          email: userData.email,
+        });
+        if (existingUser) {
+          return res.status(409).send({ message: 'User already exists' });
+        }
+
+        // Set default values
+        userData.role = 'student';
+        userData.created_at = Date.now();
+        userData.last_loggedIn = Date.now();
+
+        const result = await usersCollection.insertOne(userData);
+        res.send(result);
+      } catch (err) {
+        console.error('Error saving user:', err.message);
+        res.status(500).send({ error: 'Internal server error' });
+      }
+    });
 
     // Get all approved classes
     app.get('/classes/approved', async (req, res) => {
