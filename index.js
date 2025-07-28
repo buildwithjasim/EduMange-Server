@@ -96,8 +96,7 @@ async function run() {
 
         // Set default values
         userData.role = 'student';
-        userData.created_at = Date.now();
-        userData.last_loggedIn = Date.now();
+        userData.created_at = new Date().toISOString();
 
         const result = await usersCollection.insertOne(userData);
         res.send(result);
@@ -105,6 +104,15 @@ async function run() {
         console.error('Error saving user:', err.message);
         res.status(500).send({ error: 'Internal server error' });
       }
+    });
+
+    // get user role
+
+    app.get('user/role/:email', async (req, res) => {
+      const email = req.params.email;
+      const result = await usersCollection.findOne({ email });
+      if (!result) return res.status(404).send({ message: 'user not found' });
+      res.send({ role: result?.role });
     });
 
     // Get all approved classes
