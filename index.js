@@ -2,12 +2,24 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { MongoClient, ObjectId } = require('mongodb');
-
+const jwt = require('jsonwebtoken');
 const app = express();
 const port = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json());
+
+const verifyJWT = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).send('Unauthorized');
+
+  const token = authHeader.split(' ')[1];
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) return res.status(403).send('Forbidden');
+    req.user = decoded;
+    next();
+  });
+};
 
 // MongoDB connection
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.jkw3zok.mongodb.net/?retryWrites=true&w=majority`;
@@ -27,17 +39,30 @@ async function run() {
     const feedbacksCollection = db.collection('feedbacks');
     const paymentsCollection = db.collection('payments');
 
+    app.post('/jwt', (req, res) => {
+      const user = req.body;
+
+      const token = jwt.sign(user, process.env.JWT_SECRET, {
+        expiresIn: '7d',
+      });
+
+      res.send({ token });
+    });
     // Stripe setup
+
     const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
     // Create payment intent endpoint
     app.post('/create-payment-intent', async (req, res) => {
       const { price } = req.body;
+
+      console.log('📦 Received price from frontend:', price);
+
       if (!price || typeof price !== 'number') {
         return res.status(400).send({ error: 'Invalid price value' });
       }
 
-      const amount = Math.round(price * 100); // cents
+      const amount = Math.round(price * 100); // Stripe expects amount in cents
 
       try {
         const paymentIntent = await stripe.paymentIntents.create({
@@ -46,9 +71,11 @@ async function run() {
           payment_method_types: ['card'],
         });
 
+        console.log('✅ PaymentIntent created:', paymentIntent.id);
+
         res.send({ clientSecret: paymentIntent.client_secret });
       } catch (err) {
-        console.error('Stripe error:', err);
+        console.error('🧨 Stripe error:', err.message, err);
         res.status(500).send({ error: 'Payment intent failed' });
       }
     });
@@ -56,28 +83,78 @@ async function run() {
     // Save payment and enrollment
     app.post('/payments', async (req, res) => {
       try {
-        const { classId, email, transactionId, price, date } = req.body;
+        const {
+          email,
+          classId,
+          classTitle,
+          teacherName,
+          image,
+          price,
+          enrolledAt,
+          transactionId,
+        } = req.body;
 
-        if (!classId || !email || !transactionId || !price) {
-          return res.status(400).send({ error: 'Missing payment data' });
-        }
+        const objectClassId = new ObjectId(classId);
 
-        const paymentDoc = { classId, email, transactionId, price, date };
-        const enrollDoc = { classId, email, enrolledAt: new Date() };
+        // Step 1: Save payment info
+        const paymentDoc = {
+          email,
+          classId: objectClassId,
+          classTitle,
+          teacherName,
+          image,
+          price,
+          transactionId,
+          paidAt: new Date(enrolledAt),
+          method: 'stripe',
+          status: 'completed',
+        };
+        const paymentResult = await paymentsCollection.insertOne(paymentDoc);
 
-        await paymentsCollection.insertOne(paymentDoc);
-        await enrollmentsCollection.insertOne(enrollDoc);
+        // Step 2: Save enrollment info
+        const enrollmentDoc = {
+          email,
+          classId: objectClassId,
+          classTitle,
+          teacherName,
+          image,
+          price,
+          enrolledAt: new Date(enrolledAt),
+        };
+        const enrollResult = await enrollmentsCollection.insertOne(
+          enrollmentDoc
+        );
 
-        // Increment enrolled count atomically
+        // Step 3: Increment enrolled count in class
         await classesCollection.updateOne(
-          { _id: new ObjectId(classId) },
+          { _id: objectClassId },
           { $inc: { enrolled: 1 } }
         );
 
-        res.send({ success: true });
-      } catch (error) {
-        console.error('Payment save error:', error);
-        res.status(500).send({ error: 'Failed to save payment/enrollment' });
+        res.send({
+          success: true,
+          message: 'Payment and enrollment successful',
+          paymentId: paymentResult.insertedId,
+          enrollmentId: enrollResult.insertedId,
+        });
+      } catch (err) {
+        console.error('Payment save error:', err);
+        res
+          .status(500)
+          .send({ success: false, message: 'Internal server error' });
+      }
+    });
+
+    // POST: Save enrollment info
+    app.post('/enrollments', async (req, res) => {
+      const enrollmentData = req.body;
+
+      try {
+        const result = await enrollmentsCollection.insertOne(enrollmentData);
+        res.send(result);
+      } catch (err) {
+        console.error('❌ Error saving enrollment:', err);
+        res.status(500).send({ message: 'Enrollment save failed' });
       }
     });
 
@@ -108,11 +185,27 @@ async function run() {
 
     // get user role
 
-    app.get('user/role/:email', async (req, res) => {
+    // ✅ GET single user by email
+    app.get('/users/:email', async (req, res) => {
       const email = req.params.email;
-      const result = await usersCollection.findOne({ email });
-      if (!result) return res.status(404).send({ message: 'user not found' });
-      res.send({ role: result?.role });
+      const user = await usersCollection.findOne({ email });
+
+      if (!user) {
+        return res.status(404).send({ message: 'User not found' });
+      }
+
+      res.send(user);
+    });
+
+    app.get('/user/role/:email', async (req, res) => {
+      const email = req.params.email;
+      const user = await usersCollection.findOne({ email });
+
+      if (!user) {
+        return res.status(404).send({ error: 'User not found' });
+      }
+
+      res.send({ role: user.role });
     });
 
     // Get all approved classes
@@ -326,8 +419,51 @@ async function run() {
 
     // POST /feedback
     app.post('/feedback', async (req, res) => {
-      const result = await feedbacksCollection.insertOne(req.body);
-      res.send(result);
+      try {
+        const {
+          classId,
+          description,
+          rating,
+          studentEmail,
+          studentName,
+          studentImage,
+          createdAt,
+        } = req.body;
+
+        // Validation
+        if (
+          !classId ||
+          !description ||
+          typeof rating !== 'number' ||
+          !studentEmail ||
+          !createdAt
+        ) {
+          return res.status(400).send({ message: 'Missing required fields' });
+        }
+
+        const feedbackDoc = {
+          classId,
+          description,
+          rating,
+          studentEmail,
+          studentName: studentName || 'Anonymous',
+          studentImage:
+            studentImage || 'https://i.ibb.co/4gM3vTQ/default-avatar.png',
+          createdAt: new Date(createdAt),
+        };
+
+        const result = await feedbacksCollection.insertOne(feedbackDoc);
+        res.send({
+          success: true,
+          message: 'Feedback submitted successfully',
+          insertedId: result.insertedId,
+        });
+      } catch (err) {
+        console.error('❌ Feedback insert error:', err);
+        res
+          .status(500)
+          .send({ success: false, message: 'Internal server error' });
+      }
     });
 
     // In your Express backend
@@ -412,8 +548,31 @@ async function run() {
       try {
         const email = req.query.email;
         const enrollments = await enrollmentsCollection
-          .find({ email })
+          .aggregate([
+            { $match: { email } },
+            {
+              $lookup: {
+                from: 'classes',
+                localField: 'classId',
+                foreignField: '_id',
+                as: 'classInfo',
+              },
+            },
+            { $unwind: '$classInfo' },
+            {
+              $project: {
+                _id: 1,
+                email: 1,
+                enrolledAt: 1,
+                classId: 1,
+                title: '$classInfo.title',
+                image: '$classInfo.image',
+                teacherName: '$classInfo.teacherName',
+              },
+            },
+          ])
           .toArray();
+
         res.send(enrollments);
       } catch (error) {
         res.status(500).send({ error: 'Failed to fetch enrollments' });
