@@ -162,23 +162,37 @@ async function run() {
     app.post('/user', async (req, res) => {
       try {
         const userData = req.body;
+        const email = userData.email?.toLowerCase();
 
-        // Check if the user already exists (by email)
-        const existingUser = await usersCollection.findOne({
-          email: userData.email,
-        });
-        if (existingUser) {
-          return res.status(409).send({ message: 'User already exists' });
+        if (!email) {
+          return res.status(400).send({ error: 'Email is required' });
         }
 
-        // Set default values
-        userData.role = 'student';
-        userData.created_at = new Date().toISOString();
+        const filter = { email };
+        const updateDoc = {
+          $setOnInsert: {
+            ...userData,
+            email,
+            role: 'student',
+            created_at: new Date().toISOString(),
+          },
+        };
+        const options = { upsert: true };
 
-        const result = await usersCollection.insertOne(userData);
-        res.send(result);
+        const result = await usersCollection.updateOne(
+          filter,
+          updateDoc,
+          options
+        );
+
+        res.status(201).send({
+          message: result.upsertedCount
+            ? 'User created successfully'
+            : 'User already existed',
+          upsertedId: result.upsertedId || null,
+        });
       } catch (err) {
-        console.error('Error saving user:', err.message);
+        console.error('❌ Error saving user:', err.message);
         res.status(500).send({ error: 'Internal server error' });
       }
     });
@@ -195,6 +209,19 @@ async function run() {
       }
 
       res.send(user);
+    });
+
+    app.get('/user/role', async (req, res) => {
+      const email = req.query.email;
+      if (!email) return res.status(400).send({ error: 'Email is required' });
+
+      const user = await usersCollection.findOne({ email });
+
+      if (!user) {
+        return res.status(404).send({ error: 'User not found' });
+      }
+
+      res.send({ role: user.role || 'student' }); // fallback if role is missing
     });
 
     app.get('/user/role/:email', async (req, res) => {
