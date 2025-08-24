@@ -6,7 +6,12 @@ const jwt = require('jsonwebtoken');
 const app = express();
 const port = process.env.PORT || 5000;
 
-app.use(cors());
+app.use(
+  cors({
+    origin: ['http://localhost:5173'], // React frontend
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 const verifyJWT = (req, res, next) => {
@@ -42,12 +47,14 @@ async function run() {
     app.post('/jwt', (req, res) => {
       const user = req.body;
 
-      const token = jwt.sign(user, process.env.JWT_SECRET, {
-        expiresIn: '7d',
-      });
+      if (!user?.email) {
+        return res.status(400).send({ error: 'Email is required' });
+      }
 
+      const token = jwt.sign(user, process.env.JWT_SECRET, { expiresIn: '7d' });
       res.send({ token });
     });
+
     // Stripe setup
 
     const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
