@@ -6,12 +6,8 @@ const jwt = require('jsonwebtoken');
 const app = express();
 const port = process.env.PORT || 5000;
 
-app.use(
-  cors({
-    origin: ['http://localhost:5000'], // React frontend
-    credentials: true,
-  })
-);
+// Middleware
+app.use(cors());
 app.use(express.json());
 
 const verifyJWT = (req, res, next) => {
@@ -177,13 +173,16 @@ async function run() {
 
         const filter = { email };
         const updateDoc = {
-          $setOnInsert: {
+          $set: {
             ...userData,
             email,
+          },
+          $setOnInsert: {
             role: 'student',
             created_at: new Date().toISOString(),
           },
         };
+
         const options = { upsert: true };
 
         const result = await usersCollection.updateOne(
@@ -442,12 +441,6 @@ async function run() {
         { _id: new ObjectId(id) },
         { $inc: { submissionCount: 1 } }
       );
-      res.send(result);
-    });
-
-    // POST /submissions
-    app.post('/submissions', async (req, res) => {
-      const result = await submissionsCollection.insertOne(req.body);
       res.send(result);
     });
 
@@ -816,23 +809,34 @@ async function run() {
       }
     });
 
-    // status section
+    // Status Section APIs
     app.get('/stats/total-users', async (req, res) => {
-      const totalUsers = await usersCollection.estimatedDocumentCount();
-      res.send({ totalUsers });
+      try {
+        const totalUsers = await usersCollection.countDocuments();
+        res.send({ totalUsers });
+      } catch (error) {
+        res.status(500).send({ error: 'Failed to fetch total users' });
+      }
     });
 
     app.get('/stats/total-classes', async (req, res) => {
-      const totalClasses = await classesCollection.countDocuments({
-        status: 'approved',
-      });
-      res.send({ totalClasses });
+      try {
+        const totalClasses = await classesCollection.countDocuments({
+          status: 'approved',
+        });
+        res.send({ totalClasses });
+      } catch (error) {
+        res.status(500).send({ error: 'Failed to fetch total classes' });
+      }
     });
 
     app.get('/stats/total-enrollments', async (req, res) => {
-      const totalEnrollments =
-        await enrollmentsCollection.estimatedDocumentCount();
-      res.send({ totalEnrollments });
+      try {
+        const totalEnrollments = await enrollmentsCollection.countDocuments();
+        res.send({ totalEnrollments });
+      } catch (error) {
+        res.status(500).send({ error: 'Failed to fetch total enrollments' });
+      }
     });
 
     app.listen(port, () => {
